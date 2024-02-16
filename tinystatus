@@ -1,16 +1,70 @@
 #!/usr/bin/env sh
 
-title=tinystatus
-header="Global Status"
+title="Status page"
+header="Current Status"
 timeout=10
+pingcount=2
 tmp="$(mktemp -d)"
-checkfile="${1:-checks.csv}"
-incidentsfile="${2:-incidents.txt}"
+checkfile=checks.csv
+incidentsfile=incidents.txt
+maintenancefile=maintenance.txt
 failonoutage=false
 useragent="User-Agent: Mozilla/5.0 (X11; Linux x86_64; Debian) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.88 Safari/537.36"
 
+usage(){
+	echo "Usage:"
+	echo  "tinystatus [options]"
+	echo  "Options:"
+	echo  "	-h, --help													Displays this help message"
+	echo  "	-c, --checkfile [file]							Specify the check file (default checks.csv)"
+	echo  "	-i, --incidents [file]							Specify the incidents file (default incidents.txt)"
+	echo  "	-m, --maintenance [file]						Specify the maintenance file (default maintenance.txt)"
+	echo  "	-f, --failonoutage [true|false]			When true, exit code displays the number of failed checks"
+	echo  "	-p, --pingcount [number]						Sets the number of pings for ping check type (Default 2)"
+	echo  "	-t, --timeout [seconds]							Sets the timeout in seconds for checks (Default 10)"
+	echo  "Additional information can be found on the README file"
+}
+
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+		-h |--help )
+			>&1 usage
+			exit 0
+			;;
+		-c |--checkfile )
+			checkfile="$2"
+			shift 2
+			;;
+		-i |--incidents )
+			incidentsfile="$2"
+			shift 2
+			;;
+		-m |--maintenance )
+			maintenancefile="$2"
+			shift 2
+			;;
+		-f |--failonoutage )
+			failonoutage="$2"
+			shift 2
+			;;
+		-p |--pingcount )
+			pingcount="$2"
+			shift 2
+			;;
+		-t |--timeout )
+			timeout="$2"
+			shift 2
+			;;
+		*)
+			echo >&2 "Unknown option: $1"
+			>&2 usage
+			exit 2
+			;;
+	esac
+done
+
 command_exists(){
-    if ! command -v "${1}" >/dev/null 2>&1; then
+    if ! command -v "${1}" >/dev/null 2; then
         echo >&2 "Error: ${1} missing. Please install it"
         exit 1
     fi
@@ -31,18 +85,24 @@ check(){
         http*)
             statuscode="$(curl -${IPv}sSkLo /dev/null -H "${useragent}" -m "${timeout}" -w "%{http_code}" "${host}" 2> "${tmp}/ko/${name}.error")";;
         ping*)
-            ping -${IPv}W "${timeout}" -c 1 "${host}" >/dev/null 2>&1
+						# Changes default ping command, ping command will return average latency of n pings
+						ping -${IPv}W "${timeout}" -c 4 "${host}" > "${tmp}/${name}.ping"
             statuscode=$?
             [ "${statuscode}" -ne "${expectedcode}" ] && echo 'Host unreachable' > "${tmp}/ko/${name}.error";;
         port*)
-            error="$(nc -${IPv}w "${timeout}" -zv ${host} 2>&1)"
+            error="$(nc -${IPv}w "${timeout}" -zv ${host} 2)"
             statuscode=$?
             [ "${statuscode}" -ne "${expectedcode}" ] && echo "${error}" > "${tmp}/ko/${name}.error";;
     esac
 
     # verity status and write files
     if [ "${statuscode}" -eq "${expectedcode}" ]; then
-        echo "Status code: ${statuscode}" > "${tmp}/ok/${name}.status"
+				# If ping ctype, create tmp/ok/name.ping
+				if [ -e "${tmp}/${name}.ping" ]; then
+					avgping=`awk -F '/' 'END {gsub(/\.[0-9]+/,"",$0); print $5}' "${tmp}/${name}.ping"`
+					echo "${avgping} ms"  > "${tmp}/ok/${name}.ping"
+				fi
+				echo "Status code: ${statuscode}" > "${tmp}/ok/${name}.status"
     else
         echo "Status code: ${statuscode}" > "${tmp}/ko/${name}.status"
     fi
@@ -69,30 +129,53 @@ wait
 
 cat << EOF
 <!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no"><title>${title}</title><style>
-body { font-family: segoe ui,Roboto,Oxygen-Sans,Ubuntu,Cantarell,helvetica neue,Verdana,sans-serif; }
-h1 { margin-top: 30px; }
+body { font-family: sans-serif; background-color: #F8F8F8; color: #333333; }
+h1 { margin-top: 30px; font-size: 2em; }
+.panel > h1 { margin: 16px 0; }
 ul { padding: 0px; }
 li { list-style: none; margin-bottom: 2px; padding: 5px; border-bottom: 1px solid #ddd;  }
-.container { max-width: 600px; width: 100%; margin: 15px auto; }
-.panel { text-align: center; padding: 10px; border: 0px; border-radius: 5px; }
-.failed-bg  { color: white; background-color: #E25D6A; }
-.success-bg { color: white; background-color: #52B86A; }
-.failed  { color: #E25D6A; }
-.success { color: #52B86A; }
-.small { font-size: 80%; }
+main { max-width: 600px; width: 100%; margin: 15px auto; }
+.panel { text-align: center; padding: 10px; border: 0px; border-radius: 5px; 
+.center { text-align: center; }
+.failed-bg  { color: #F8F8F8; background-color: darkred; }
+.success-bg { color: #F8F8F8; background-color: darkgreen; }
+.failed  { color: darkred; font-weight: bold; }
+.success { color: darkgreen; font-weight: bold; }
+.small { font-size: 80%; font-weight: normal; }
 .status { float: right; }
+a { text-decoration: none; color: #0044CC; }
+a:focus, a:hover { text-decoration: underline; }
+a:active { color: indigo; text-decoration: underline; }
+a:visited { color: indigo; }
+li:focus, li:hover { background-color: #DDDDDD; border-radius: 5px; }
+section[title="incidents"] > p {border-left: 2px solid #333; padding-left: 2px; border-bottom: 2px solid transparent; border-top: 2px solid transparent; }
 </style></head>
 <body>
-<div class='container'>
+<main>
+<section title="status">
 <h1>${header}</h1>
 EOF
 outagenb="$(find "${tmp}/ko" -mindepth 1 | grep -c 'status$')"
 if [ "${outagenb}" -ne 0 ]; then
-    echo "<ul><li class='panel failed-bg'>${outagenb} Outage(s)</li></ul>"
+    echo "<p class='panel failed-bg'>${outagenb} Outage(s)</p>"
 else
-    echo "<ul><li class='panel success-bg'>All Systems Operational</li></ul>"
+    echo "<p class='panel success-bg'>All Systems Operational</p>"
+fi
+if [ -f "${maintenancefile}" ]; then
+    if [ -s "${maintenancefile}" ]; then
+cat << EOF
+<section title='maintenance' class="panel failed-bg">
+<h1>Scheduled maintenance</h1>
+EOF
+        sed 's|^\(.*\)$|<p>\1</p>|' "${maintenancefile}"
+				echo '</section>'
+    else
+        echo '<p class="panel success-bg">No maintenance scheduled yet!</p>'
+    fi
 fi
 cat << EOF
+</section>
+<section title="services">
 <h1>Services</h1>
 <ul>
 EOF
@@ -105,22 +188,37 @@ done
 for file in "${tmp}/ok/"*.status; do
     [ -e "${file}" ] || continue
     name="$(basename "${file}" | sed 's,.status$,,')"
-    echo "<li>${name} <span class='status success'>Operational</span></li>"
+		# If ctype was ping, status will display average ping instead of "Operational"
+		if [ -e "${tmp}/ok/${name}.ping" ]; then
+			ping="$(cat "${tmp}/ok/${name}.ping")"
+			echo "<li>${name} <span class='status success'>Average of ${pingcount}: ${ping}</span></li>"
+		else
+			echo "<li>${name} <span class='status success'>Operational</span></li>"
+		fi
 done
 cat << EOF
 </ul>
-<p class=small> Last check: $(date +%FT%T%z)</p>
+<p class=small> Last check: <time datetime="$(date +%FT%T%z)">$(date +%FT%T%z)</time>. <a href="./">Refresh</a></p>
+</section>
 EOF
 if [ -f "${incidentsfile}" ]; then
-    echo '<h1>Incidents</h1>'
+cat << EOF
+<section title="incidents">
+<h1>Incidents</h1>
+<ul>
+EOF
+		echo '<h1>Incidents</h1>'
     if [ -s "${incidentsfile}" ]; then
-        sed 's|^\(.*\)$|<p>\1</p>|' "${incidentsfile}"
+        sed 's|^\(.*\)$|<li>\1</li>|' "${incidentsfile}"
     else
-        echo '<p>No incident reported yet ;)</p>'
+        echo '<li>No incident reported yet!</li>'
     fi
 fi
 cat <<EOF
-</div>
+</ul>
+</section>
+</main>
+<footer class="center"><p><small>Based on <a href="https://github.com/bderenzo/tinystatus">tinystatus</a></small></p></footer>
 </body></html>
 EOF
 
